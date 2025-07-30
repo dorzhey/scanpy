@@ -13,13 +13,9 @@ from matplotlib import pyplot as plt
 from .. import logging as logg
 from .._compat import old_positionals
 from .._utils import _empty
-from ._anndata import (
-    VarGroups,
-    _plot_dendrogram,
-    _plot_var_groups_brackets,
-    _prepare_dataframe,
-    _reorder_categories_after_dendrogram,
-)
+from ..get._aggregated import aggregate
+from ._anndata import (VarGroups, _plot_dendrogram, _plot_var_groups_brackets,
+                       _prepare_dataframe, _reorder_categories_after_dendrogram)
 from ._utils import check_colornorm, make_grid_spec
 
 if TYPE_CHECKING:
@@ -127,6 +123,7 @@ class BasePlot:
         var_group_labels: Sequence[str] | None = None,
         var_group_positions: Sequence[tuple[int, int]] | None = None,
         var_group_rotation: float | None = None,
+        agg_funcs: set | None = None,
         layer: str | None = None,
         ax: _AxesSubplot | None = None,
         vmin: float | None = None,
@@ -144,17 +141,29 @@ class BasePlot:
         del var_group_labels, var_group_positions
         self.var_group_rotation = var_group_rotation
         self.width, self.height = figsize if figsize is not None else (None, None)
-
-        self.categories, self.obs_tidy = _prepare_dataframe(
+        #self.var_names   = var_names
+        #self.groupby     = groupby
+        self.agg_funcs   = list(agg_funcs)
+        #self.layer       = layer
+        # self.categories, self.obs_tidy = _prepare_dataframe(
+        #     adata,
+        #     self.var_names,
+        #     groupby,
+        #     use_raw=use_raw,
+        #     log=log,
+        #     num_categories=num_categories,
+        #     layer=layer,
+        #     gene_symbols=gene_symbols,
+        # )
+        self._adata_grouped = aggregate(
             adata,
-            self.var_names,
-            groupby,
-            use_raw=use_raw,
-            log=log,
-            num_categories=num_categories,
+            by=self.groupby,
+            func=self.agg_funcs,
             layer=layer,
-            gene_symbols=gene_symbols,
+            axis='obs',
         )
+        self.categories = list(self._adata_grouped.obs_names)
+        
         if len(self.categories) > self.MAX_NUM_CATEGORIES:
             warn(
                 f"Over {self.MAX_NUM_CATEGORIES} categories found. "
@@ -164,16 +173,16 @@ class BasePlot:
             )
 
         if categories_order is not None and (
-            set(self.obs_tidy.index.categories) != set(categories_order)
+            set(self.categories) != set(categories_order)
         ):
             logg.error(
                 "Please check that the categories given by "
                 "the `order` parameter match the categories that "
                 "want to be reordered.\n\n"
                 "Mismatch: "
-                f"{set(self.obs_tidy.index.categories).difference(categories_order)}\n\n"
+                f"{set(self.categories).difference(categories_order)}\n\n"
                 f"Given order categories: {categories_order}\n\n"
-                f"{groupby} categories: {list(self.obs_tidy.index.categories)}\n"
+                f"{groupby} categories: {list(self.categories)}\n"
             )
             return
 
@@ -397,10 +406,21 @@ class BasePlot:
 
         _sort = sort is not None
         _ascending = sort == "ascending"
-        counts_df = self.obs_tidy.index.value_counts(sort=_sort, ascending=_ascending)
 
+        counts_df = pd.DataFrame(
+            self._adata_grouped.obs_vector("_n_obs"),
+            index=self.categories,
+            columns=["count"],
+        )
+        
         if _sort:
-            self.categories_order = counts_df.index
+            counts_df = counts_df.sort_values("count", ascending=_ascending)
+            self.categories_order = list(counts_df.index)
+        
+        # counts_df = self.obs_tidy.index.value_counts(sort=_sort, ascending=_ascending)
+
+        # if _sort:
+        #     self.categories_order = counts_df.index
 
         self.plot_group_extra = {
             "kind": "group_totals",

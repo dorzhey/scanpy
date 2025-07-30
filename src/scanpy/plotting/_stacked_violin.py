@@ -15,13 +15,8 @@ from .._settings import settings
 from .._utils import _doc_params, _empty
 from ._baseplot_class import BasePlot, doc_common_groupby_plot_args
 from ._docs import doc_common_plot_args, doc_show_save_ax, doc_vboundnorm
-from ._utils import (
-    _deprecated_scale,
-    _dk,
-    check_colornorm,
-    make_grid_spec,
-    savefig_or_show,
-)
+from ._utils import (_deprecated_scale, _dk, check_colornorm, make_grid_spec,
+                     savefig_or_show)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -217,6 +212,7 @@ class StackedViolin(BasePlot):
             var_group_positions=var_group_positions,
             var_group_labels=var_group_labels,
             var_group_rotation=var_group_rotation,
+            agg_funcs=('mean',),
             layer=layer,
             ax=ax,
             vmin=vmin,
@@ -225,21 +221,47 @@ class StackedViolin(BasePlot):
             norm=norm,
             **kwds,
         )
-
+        df = pd.DataFrame(
+            self._adata_grouped.layers['mean'],
+            index=self.categories,
+            columns=self.var_names,
+        )
         if standard_scale == "obs":
             standard_scale = "group"
             msg = "`standard_scale='obs'` is deprecated, use `standard_scale='group'` instead"
             warnings.warn(msg, FutureWarning, stacklevel=2)
-        if standard_scale == "group":
-            self.obs_tidy = self.obs_tidy.sub(self.obs_tidy.min(1), axis=0)
-            self.obs_tidy = self.obs_tidy.div(self.obs_tidy.max(1), axis=0).fillna(0)
-        elif standard_scale == "var":
-            self.obs_tidy -= self.obs_tidy.min(0)
-            self.obs_tidy = (self.obs_tidy / self.obs_tidy.max(0)).fillna(0)
+        
+        if standard_scale == 'group':
+            df = (df.sub(df.min(1), axis=0)
+                    .div(df.max(1), axis=0)
+                    .fillna(0))
+        elif standard_scale == 'var':
+            df = (df.sub(df.min(0), axis=1)
+                    .div(df.max(0), axis=1)
+                    .fillna(0))
         elif standard_scale is None:
             pass
         else:
             logg.warning("Unknown type for standard_scale, ignored")
+
+        self.obs_tidy = df.loc[self.categories]
+
+
+
+        # if standard_scale == "obs":
+        #     standard_scale = "group"
+        #     msg = "`standard_scale='obs'` is deprecated, use `standard_scale='group'` instead"
+        #     warnings.warn(msg, FutureWarning, stacklevel=2)
+        # if standard_scale == "group":
+        #     self.obs_tidy = self.obs_tidy.sub(self.obs_tidy.min(1), axis=0)
+        #     self.obs_tidy = self.obs_tidy.div(self.obs_tidy.max(1), axis=0).fillna(0)
+        # elif standard_scale == "var":
+        #     self.obs_tidy -= self.obs_tidy.min(0)
+        #     self.obs_tidy = (self.obs_tidy / self.obs_tidy.max(0)).fillna(0)
+        # elif standard_scale is None:
+        #     pass
+        # else:
+        #     logg.warning("Unknown type for standard_scale, ignored")
 
         # Set default style parameters
         self.cmap = self.DEFAULT_COLORMAP

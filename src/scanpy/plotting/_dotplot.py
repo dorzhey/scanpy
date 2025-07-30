@@ -9,15 +9,10 @@ from .. import logging as logg
 from .._compat import old_positionals
 from .._settings import settings
 from .._utils import _doc_params, _empty
+from ..get._aggregated import aggregate
 from ._baseplot_class import BasePlot, doc_common_groupby_plot_args
 from ._docs import doc_common_plot_args, doc_show_save_ax, doc_vboundnorm
-from ._utils import (
-    _dk,
-    check_colornorm,
-    fix_kwds,
-    make_grid_spec,
-    savefig_or_show,
-)
+from ._utils import _dk, check_colornorm, fix_kwds, make_grid_spec, savefig_or_show
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -179,6 +174,7 @@ class DotPlot(BasePlot):
             var_group_positions=var_group_positions,
             var_group_labels=var_group_labels,
             var_group_rotation=var_group_rotation,
+            agg_funcs=('count_nonzero', 'mean'),
             layer=layer,
             ax=ax,
             vmin=vmin,
@@ -187,6 +183,77 @@ class DotPlot(BasePlot):
             norm=norm,
             **kwds,
         )
+        
+        ad_grp = self._adata_grouped
+        
+        tot    = ad_grp.obs_vector("_n_obs")[:, None]
+
+        # 1) dot size: fraction of cells with expression > cutoff
+        if expression_cutoff == 0.0:
+            df_size = pd.DataFrame(
+                ad_grp.layers["count_nonzero"] / tot,
+                index=self.categories,
+                columns=self.var_names,
+            )
+        else:
+            # use a temporary view to compute boolean mean = fraction expressing
+            view = adata[:, self.var_names].copy()
+            mask = view.X > expression_cutoff
+            view.X = mask.astype(int)
+            view_grp = aggregate(
+                view,
+                by=groupby,
+                func=("mean",),
+                axis="obs",
+            )
+            df_size = pd.DataFrame(
+                view_grp.X,
+                index=view_grp.obs_names,
+                columns=self.var_names,
+            )
+
+        # 2) dot color: mean expression (optionally only expressed cells)
+        if dot_color_df is not None:
+            df_color = dot_color_df.copy()
+        elif mean_only_expressed and expression_cutoff > 0.0:
+            view2 = adata[:, self.var_names].copy()
+            mask = view2.X > expression_cutoff
+            data = view2.X.multiply(mask) if hasattr(view2.X, "multiply") else view2.X * mask
+            view2.X = data
+            view2 = aggregate(
+                view2,
+                by=groupby,
+                func=("sum",),
+                axis="obs",
+            )
+            sum_df = pd.DataFrame(
+                view2.X,
+                index=view2.obs_names,
+                columns=self.var_names,
+            )
+            df_color = sum_df.div(df_size * tot).fillna(0)
+        else:
+            df_color = pd.DataFrame(
+                ad_grp.layers["mean"],
+                index=self.categories,
+                columns=self.var_names,
+            )
+
+        # 3) standard scaling
+        if standard_scale == "group":
+            df_color = df_color.sub(df_color.min(1), axis=0).div(df_color.max(1), axis=0).fillna(0)
+        elif standard_scale == "var":
+            df_color = df_color.sub(df_color.min(0), axis=1).div(df_color.max(0), axis=1).fillna(0)
+        elif standard_scale is None:
+            pass
+        else:
+            logg.warning("Unknown type for standard_scale, ignored")
+
+        # reorder
+        cats   = categories_order if categories_order is not None else self.categories
+        self.dot_size_df  = df_size.loc[cats]
+        self.dot_color_df = df_color.loc[cats]
+
 
         # for if category defined by groupby (if any) compute for each var_name
         # 1. the fraction of cells in the category having a value >expression_cutoff
@@ -261,6 +328,8 @@ class DotPlot(BasePlot):
             ]
             for df in (dot_color_df, dot_size_df)
         )
+
+
         self.standard_scale = standard_scale
 
         # Set default style parameters
